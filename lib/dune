@@ -1,0 +1,3 @@
+(library
+ (name socks5)
+ (libraries unix))

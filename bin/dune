@@ -1,0 +1,11 @@
+(executable
+ (public_name socks5_client)
+ (name client)
+ (modules client)
+ (libraries socks5))
+
+(executable
+  (public_name socks5_server)
+  (name server)
+  (modules server)
+  (libraries socks5))
