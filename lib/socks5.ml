@@ -49,6 +49,10 @@ module Misc = struct
     done
 end
 
+let print_bytes by =
+  Bytes.iter (fun c -> Printf.printf "%02x " (int_of_char c)) by;
+  print_newline ()
+
 let client () =
   print_endline "socks5 client starts...";
   let server_name = gethostname ()
@@ -62,12 +66,25 @@ let client () =
   connect sock (ADDR_INET(server_addr, port_number));
   match fork () with
   | 0 ->
-    Misc.retransmit stdin sock;
+    let version = 5 in
+    let nmethods = 1 in
+    let methods = 0x00 in
+    let buffer = Bytes.create 3 in
+    Bytes.set buffer 0 (char_of_int version);
+    Bytes.set buffer 1 (char_of_int nmethods);
+    Bytes.set buffer 2 (char_of_int methods);
+    let msg_len = 3 in
+    let n = write sock buffer 0 msg_len in
     shutdown sock SHUTDOWN_SEND;
+    Printf.printf "[sent %d bytes] " n;
+    print_bytes (Bytes.sub buffer 0 n);
     exit 0
   | _ ->
-    Misc.retransmit sock stdout;
-    close stdout;
+    let buffer_size = 4096 in
+    let buffer = Bytes.create buffer_size in
+    let n = read sock buffer 0 buffer_size in
+    Printf.printf "[recv %d bytes] " n;
+    print_bytes (Bytes.sub buffer 0 n);
     wait ()
 
 let server () =
@@ -80,17 +97,29 @@ let server () =
   let host = (gethostbyname(gethostname ())).h_addr_list.(0) in 
   let addr = ADDR_INET (host, port) in
   let treat sock (_, client_addr as client) =
-    (* log information *)
     begin match client_addr with
       | ADDR_INET(caller, _) ->
         prerr_endline ("Connection from " ^ string_of_inet_addr caller);
       | ADDR_UNIX _ ->
         prerr_endline "Connection from the Unix domain (???)";
     end;
-    (* connection treatment *)
     let service (s, _) =
-      dup2 s stdin; dup2 s stdout; dup2 s stderr; close s;
-      execvp "pwd" [|"pwd"|]
+      print_endline "[service] entering...";
+      let buffer_size = 4096 in
+      let buffer = Bytes.create buffer_size in
+      let n = read s buffer 0 buffer_size in
+      Printf.printf "[recv %d bytes] " n;
+      print_bytes (Bytes.sub buffer 0 n);
+      let msg = "Reply from server." in
+      let buffer = Bytes.of_string msg in
+      let n = write s buffer 0 (String.length msg) in
+      Printf.printf "[sent %d bytes] " n;
+      print_bytes (Bytes.sub buffer 0 n)
+      (*dup2 s stdin;
+      dup2 s stdout;
+      dup2 s stderr;
+      close s;
+      execvp "pwd" [|"pwd"|]*)
     in
     Misc.double_fork_treatment sock service client in
   Misc.tcp_server treat addr
