@@ -53,6 +53,30 @@ let print_bytes by =
   Bytes.iter (fun c -> Printf.printf "%02x " (int_of_char c)) by;
   print_newline ()
 
+let ipv4_addr_to_bytes addr =
+  let ss = String.split_on_char '.' addr in
+  let is = List.map int_of_string ss in
+  let bs = Bytes.create (List.length is) in
+  let rec set i vs = match (i, vs) with
+    | (_, []) -> ()
+    | (i, (x :: ys)) -> begin
+      Bytes.set bs i (char_of_int x);
+      set (i + 1) ys
+    end
+  in
+  set 0 is;
+  bs
+
+let ipv4_addr_of_bytes by =
+  let f s i =
+    let v = Bytes.get by i in
+    let v = v |> int_of_char |> string_of_int in
+    match s with
+    | "" -> v
+    | _ -> s ^ "." ^ v
+  in
+  List.fold_left f "" [0;1;2;3]
+
 let client () =
   print_endline "socks5 client starts...";
   let server_name = gethostname ()
@@ -64,8 +88,8 @@ let client () =
       exit 2 in
   let sock = socket PF_INET SOCK_STREAM 0 in
   connect sock (ADDR_INET(server_addr, port_number));
-  match fork () with
-  | 0 ->
+  (*match fork () with
+  | 0 ->*)
     let version = 5 in
     let nmethods = 1 in
     let methods = 0x00 in
@@ -75,17 +99,34 @@ let client () =
     Bytes.set buffer 2 (char_of_int methods);
     let msg_len = 3 in
     let n = write sock buffer 0 msg_len in
-    shutdown sock SHUTDOWN_SEND;
-    Printf.printf "[sent %d bytes] " n;
+    Printf.printf "[sent %4d bytes] " n;
     print_bytes (Bytes.sub buffer 0 n);
-    exit 0
-  | _ ->
+  (*  exit 0
+  | _ ->*)
     let buffer_size = 4096 in
     let buffer = Bytes.create buffer_size in
     let n = read sock buffer 0 buffer_size in
-    Printf.printf "[recv %d bytes] " n;
+    Printf.printf "[recv %4d bytes] " n;
     print_bytes (Bytes.sub buffer 0 n);
-    wait ()
+
+    let ver = 5 in
+    let cmd = 1 in
+    let atyp = 1 in
+    let dst_addr = "127.0.0.1" in
+    let dst_port = 8765 in
+    let dst_addr_len = 4 in
+    let msg_len = 4 + dst_addr_len + 2 in
+    let buffer = Bytes.create msg_len in
+    Bytes.set buffer 0 (char_of_int ver);
+    Bytes.set buffer 1 (char_of_int cmd);
+    Bytes.set buffer 2 '\000';
+    Bytes.set buffer 3 (char_of_int atyp);
+    Bytes.blit (ipv4_addr_to_bytes dst_addr) 0 buffer 4 dst_addr_len;
+    Bytes.set_int16_ne buffer (4 + dst_addr_len) dst_port;
+    let n = write sock buffer 0 msg_len in
+    Printf.printf "[sent %4d bytes] " n;
+    print_bytes (Bytes.sub buffer 0 n);
+    shutdown sock SHUTDOWN_ALL
 
 let server () =
   print_endline "socks5 server starts...";
@@ -94,7 +135,7 @@ let server () =
     exit 2;
   end;
   let port = int_of_string Sys.argv.(1) in
-  let host = (gethostbyname(gethostname ())).h_addr_list.(0) in 
+  let host = (gethostbyname (gethostname ())).h_addr_list.(0) in
   let addr = ADDR_INET (host, port) in
   let treat sock (_, client_addr as client) =
     begin match client_addr with
@@ -108,18 +149,40 @@ let server () =
       let buffer_size = 4096 in
       let buffer = Bytes.create buffer_size in
       let n = read s buffer 0 buffer_size in
-      Printf.printf "[recv %d bytes] " n;
+      Printf.printf "[recv %4d bytes] " n;
       print_bytes (Bytes.sub buffer 0 n);
-      let msg = "Reply from server." in
-      let buffer = Bytes.of_string msg in
-      let n = write s buffer 0 (String.length msg) in
-      Printf.printf "[sent %d bytes] " n;
-      print_bytes (Bytes.sub buffer 0 n)
-      (*dup2 s stdin;
-      dup2 s stdout;
-      dup2 s stderr;
-      close s;
-      execvp "pwd" [|"pwd"|]*)
+      let version = int_of_char (Bytes.get buffer 0) in
+      let nmethod = int_of_char (Bytes.get buffer 1) in
+      let methods = int_of_char (Bytes.get buffer 2) in
+      let buffer = Bytes.create 2 in
+      Bytes.set buffer 0 (char_of_int version);
+      Bytes.set buffer 1 (char_of_int methods);
+      let n = write s buffer 0 2 in
+      Printf.printf "[sent %4d bytes] " n;
+      print_bytes (Bytes.sub buffer 0 n);
+      assert ((nmethod = 1) && (methods = 0x00));
+      (* 0x00: no authentication required *)
+      let loop () =
+        let buffer_size = 4096 in
+        let buffer = Bytes.create buffer_size in
+        let n = read s buffer 0 buffer_size in
+        Printf.printf "[recv %4d bytes] " n;
+        print_bytes (Bytes.sub buffer 0 n);
+        let _ver = int_of_char (Bytes.get buffer 0) in
+        let cmd = int_of_char (Bytes.get buffer 1) in
+        let atyp = int_of_char (Bytes.get buffer 3) in
+        (* 0x1: connect *)
+        assert (cmd = 1);
+        (* 0x1: ipv4 *)
+        assert (atyp = 1);
+        let dst_addr_len = 4 in
+        let dst_addr_buf = Bytes.create dst_addr_len in
+        Bytes.blit buffer 4 dst_addr_buf 0 dst_addr_len;
+        let dst_port = Bytes.get_int16_ne buffer (4 + dst_addr_len) in
+        Printf.printf "== dst addr: %s\n" (ipv4_addr_of_bytes dst_addr_buf);
+        Printf.printf "== dst port: %d\n" dst_port;
+      in
+      loop ()
     in
     Misc.double_fork_treatment sock service client in
   Misc.tcp_server treat addr
