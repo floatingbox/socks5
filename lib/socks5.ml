@@ -77,6 +77,28 @@ let ipv4_addr_of_bytes by =
   in
   List.fold_left f "" [0;1;2;3]
 
+module Msg = struct
+  type t = {
+    ver: int;
+    cmd_rep: int;
+    atyp: int;
+    dst_addr: string;
+    dst_addr_len: int;
+    dst_port: int;
+  }
+
+  let serialize msg =
+    let msg_len = 4 + msg.dst_addr_len + 2 in
+    let buffer = Bytes.create msg_len in
+    Bytes.set buffer 0 (char_of_int msg.ver);
+    Bytes.set buffer 1 (char_of_int msg.cmd_rep);
+    Bytes.set buffer 2 '\000';
+    Bytes.set buffer 3 (char_of_int msg.atyp);
+    Bytes.blit (ipv4_addr_to_bytes msg.dst_addr) 0 buffer 4 msg.dst_addr_len;
+    Bytes.set_int16_ne buffer (4 + msg.dst_addr_len) msg.dst_port;
+    buffer
+end
+
 let client () =
   print_endline "socks5 client starts...";
   let server_name = gethostname ()
@@ -125,6 +147,12 @@ let client () =
     Bytes.set_int16_ne buffer (4 + dst_addr_len) dst_port;
     let n = write sock buffer 0 msg_len in
     Printf.printf "[sent %4d bytes] " n;
+    print_bytes (Bytes.sub buffer 0 n);
+
+    let buffer_size = 4096 in
+    let buffer = Bytes.create buffer_size in
+    let n = read sock buffer 0 buffer_size in
+    Printf.printf "[recv %4d bytes] " n;
     print_bytes (Bytes.sub buffer 0 n);
     shutdown sock SHUTDOWN_ALL
 
@@ -178,9 +206,43 @@ let server () =
         let dst_addr_len = 4 in
         let dst_addr_buf = Bytes.create dst_addr_len in
         Bytes.blit buffer 4 dst_addr_buf 0 dst_addr_len;
+        let dst_addr = ipv4_addr_of_bytes dst_addr_buf in
         let dst_port = Bytes.get_int16_ne buffer (4 + dst_addr_len) in
-        Printf.printf "== dst addr: %s\n" (ipv4_addr_of_bytes dst_addr_buf);
+        Printf.printf "== dst addr: %s\n" dst_addr;
         Printf.printf "== dst port: %d\n" dst_port;
+
+        let dst_inet_addr = (gethostbyname dst_addr).h_addr_list.(0) in
+        let dst_sock = socket PF_INET SOCK_STREAM 0 in
+        let ver = 5 in
+        let rep = begin
+          try
+            connect dst_sock (ADDR_INET (dst_inet_addr, dst_port));
+            Printf.printf "connection to %s:%d established...\n" dst_addr dst_port;
+            0x00
+          with Unix.Unix_error (err, _, _) ->
+            Printf.printf "### %s\n" (error_message err);
+            0x05
+        end in
+        let rsv = 0x00 in
+        let atyp = 0x01 in
+        let bnd_addr = "127.0.0.1" in
+        let bnd_port = 5679 in
+        let addr_len = 4 in
+        let msg_len = 4 + addr_len + 2 in
+        let buffer = Bytes.create msg_len in
+        Bytes.set buffer 0 (char_of_int ver);
+        Bytes.set buffer 1 (char_of_int rep);
+        Bytes.set buffer 2 (char_of_int rsv);
+        Bytes.set buffer 3 (char_of_int atyp);
+        Bytes.blit (ipv4_addr_to_bytes bnd_addr) 0 buffer 4 addr_len;
+        Bytes.set_int16_ne buffer (4 + addr_len) bnd_port;
+        let n = write s buffer 0 msg_len in
+        Printf.printf "[sent %4d bytes] " n;
+        print_bytes (Bytes.sub buffer 0 n);
+        if rep != 0x00 then begin
+          shutdown s SHUTDOWN_ALL;
+          Printf.printf "closed client connection";
+        end
       in
       loop ()
     in
