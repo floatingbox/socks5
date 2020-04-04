@@ -38,7 +38,9 @@ module Misc = struct
       bind s addr;
       listen s 10;
       s
-    with z -> close s; raise z
+    with z ->
+      close s;
+      raise z
 
   let tcp_server treat_connection addr =
     ignore (signal sigpipe Signal_ignore);
@@ -79,6 +81,49 @@ let ipv4_addr_of_bytes by =
     | _ -> s ^ "." ^ v
   in
   List.fold_left f "" [0;1;2;3]
+
+module Tester = struct
+(*  let request =
+    let uri = Uri.of_string "localhost" in
+    let%lwt (response, body) = Cohttp_lwt_unix.Client.get uri in
+    assert (response.status = `OK);
+    let%lwt body = Cohttp_lwt.Body.to_string body in
+    print_endline body |> Lwt.return
+
+  let do_request =
+    print_endline "Tester.do_request";
+    Lwt_main.run request*)
+
+  let http_request uri socks5_addr socks5_port =
+    let socks5_addr =
+      try (gethostbyname socks5_addr).h_addr_list.(0)
+      with Not_found ->
+        prerr_endline (socks5_addr ^ ": Host not found");
+        exit 2 in
+    let sock = socket PF_INET SOCK_STREAM 0 in
+    connect sock (ADDR_INET (socks5_addr, socks5_port));
+    let packet = "GET / HTTP/1.1\r\n" in
+    let packet = packet ^ "Host: " ^ uri ^ "\r\n" in
+    let packet_len = String.length packet in
+
+    let dst_addr = (gethostbyname uri).h_addr_list.(0) in
+    let dst_addr_len = 4 in
+    let dst_addr = Core.Unix.Inet_addr.to_string dst_addr in
+    print_endline ("dst_addr: " ^ dst_addr);
+    let dst_addr_buf = ipv4_addr_to_bytes dst_addr in
+    let dst_port = 80 in
+    let packet_offset = 1 + dst_addr_len + 2 in
+
+    let buffer_len = packet_offset + packet_len in
+    let buffer = Bytes.create buffer_len in
+    Bytes.set buffer 0 (char_of_int dst_addr_len);
+    Bytes.blit dst_addr_buf 0 buffer 1 dst_addr_len;
+    Bytes.set_int16_ne buffer (1 + dst_addr_len) dst_port;
+    Bytes.blit_string packet 0 buffer packet_offset packet_len;
+
+    let n = write sock buffer 0 (Bytes.length buffer) in
+    Printf.printf "[sent %4d bytes] %d\n" n
+end
 
 module Msg = struct
   type t = {
@@ -126,6 +171,14 @@ module Msg = struct
     }
 end
 
+let receive sock =
+  let buffer_size = 4096 in
+  let buffer = Bytes.create buffer_size in
+  let n = read sock buffer 0 buffer_size in
+  Printf.printf "[recv %4d bytes] " n;
+  print_bytes (Bytes.sub buffer 0 n);
+  Bytes.sub buffer 0 n
+
 let client () =
   print_endline "socks5 client starts...";
   let server_name = gethostname ()
@@ -136,7 +189,7 @@ let client () =
       prerr_endline (server_name ^ ": Host not found");
       exit 2 in
   let sock = socket PF_INET SOCK_STREAM 0 in
-  connect sock (ADDR_INET(server_addr, port_number));
+  connect sock (ADDR_INET (server_addr, port_number));
   (*match fork () with
   | 0 ->*)
     let version = 5 in
@@ -158,25 +211,48 @@ let client () =
     Printf.printf "[recv %4d bytes] " n;
     print_bytes (Bytes.sub buffer 0 n);
 
-    let msg: Msg.t = {
-      ver = 5;
-      cmd_rep = 1;
-      atyp = 1;
-      addr = "127.0.0.1";
-      port = 8765;
-      addr_len =4;
-    } in
-    let buffer = Msg.serialize msg in
-    let n = write sock buffer 0 (Bytes.length buffer) in
-    Printf.printf "[sent %4d bytes] " n;
-    print_bytes (Bytes.sub buffer 0 n);
+    let listen_addr =
+      let listen_addr = (gethostbyname (gethostname ())).h_addr_list.(0) in
+      let listen_port = 4567 in
+      ADDR_INET (listen_addr, listen_port) in
+    let listen_sock = Misc.install_tcp_server_socket listen_addr in
+    let (listen_sock, _) = accept listen_sock in
 
-    let buffer_size = 4096 in
-    let buffer = Bytes.create buffer_size in
-    let n = read sock buffer 0 buffer_size in
-    Printf.printf "[recv %4d bytes] " n;
-    print_bytes (Bytes.sub buffer 0 n);
-    let _msg = Msg.deserialize buffer in
+    let loop () =
+      let buffer = receive listen_sock in
+      let dst_addr_len = int_of_char (Bytes.get buffer 0) in
+      let dst_addr_buf = Bytes.create dst_addr_len in
+      Bytes.blit buffer 1 dst_addr_buf 0 dst_addr_len;
+      let dst_addr = ipv4_addr_of_bytes dst_addr_buf in
+      let dst_port = Bytes.get_int16_ne buffer (1 + dst_addr_len) in
+      Printf.printf "== dst addr: %s\n" dst_addr;
+      Printf.printf "== dst port: %d\n" dst_port;
+      let packet_offset = 1 + dst_addr_len + 2 in
+      let packet_len = (Bytes.length buffer) - packet_offset in
+      let packet = Bytes.sub buffer packet_offset packet_len in
+      Printf.printf "== packet: %s\n" (Bytes.to_string packet);
+
+      let dst_addr = "127.0.0.1" in
+      let dst_addr_len = 4 in
+      let dst_port = 80 in
+      let msg: Msg.t = {
+        ver = 5;
+        cmd_rep = 1;
+        atyp = 1;
+        addr = dst_addr;
+        port = dst_port;
+        addr_len = dst_addr_len;
+      } in
+      let buffer = Msg.serialize msg in
+      let n = write sock buffer 0 (Bytes.length buffer) in
+      Printf.printf "[sent %4d bytes] " n;
+      print_bytes (Bytes.sub buffer 0 n);
+
+      let buffer = receive sock in
+      let _msg = Msg.deserialize buffer in
+      ()
+    in
+    loop ();
     shutdown sock SHUTDOWN_ALL
 
 let server () =

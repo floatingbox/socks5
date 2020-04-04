@@ -1,3 +1,4 @@
 (library
  (name socks5)
- (libraries unix))
+ (libraries core unix lwt cohttp cohttp-lwt-unix)
+ (preprocess (pps lwt_ppx)))

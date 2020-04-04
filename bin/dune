@@ -9,3 +9,9 @@
   (name server)
   (modules server)
   (libraries socks5))
+
+(executable
+  (public_name tester)
+  (name tester)
+  (modules tester)
+  (libraries socks5))
