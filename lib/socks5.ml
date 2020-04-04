@@ -19,11 +19,13 @@ module Misc = struct
     finally y;
     res
 
-  let double_fork_treatment server service (client_descr, _ as client) =
+  let double_fork_treatment sock service (client_descr, _ as client) =
     let treat () = match fork () with
       | 0 ->
         if fork () <> 0 then exit 0;
-        close server; service client; exit 0
+        close sock;
+        service client;
+        exit 0
       | k ->
         ignore (restart_on_EINTR (waitpid []) k)
     in
@@ -31,6 +33,7 @@ module Misc = struct
 
   let install_tcp_server_socket addr =
     let s = socket PF_INET SOCK_STREAM 0 in
+    setsockopt s SO_REUSEADDR true;
     try
       bind s addr;
       listen s 10;
@@ -248,7 +251,7 @@ let server () =
         print_bytes (Bytes.sub buffer 0 n);
         if msg.cmd_rep != 0x00 then begin
           shutdown s SHUTDOWN_ALL;
-          Printf.printf "closed client connection";
+          Printf.printf "closed client connection\n";
         end
       in
       loop ()
