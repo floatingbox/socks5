@@ -15,3 +15,9 @@
   (name tester)
   (modules tester)
   (libraries socks5))
+
+(executable
+  (public_name http_test_server)
+  (name http_test_server)
+  (modules http_test_server)
+  (libraries lwt cohttp cohttp-lwt-unix))

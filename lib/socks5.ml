@@ -82,6 +82,19 @@ let ipv4_addr_of_bytes by =
   in
   List.fold_left f "" [0;1;2;3]
 
+let receive sock =
+  let buffer_size = 4096 in
+  let buffer = Bytes.create buffer_size in
+  let n = read sock buffer 0 buffer_size in
+  Printf.printf "[recv %4d bytes] " n;
+  print_bytes (Bytes.sub buffer 0 n);
+  Bytes.sub buffer 0 n
+
+let send sock buffer =
+  let n = write sock buffer 0 (Bytes.length buffer) in
+  Printf.printf "[sent %4d bytes] " n;
+  print_bytes (Bytes.sub buffer 0 n)
+
 module Tester = struct
 (*  let request =
     let uri = Uri.of_string "localhost" in
@@ -104,6 +117,7 @@ module Tester = struct
     connect sock (ADDR_INET (socks5_addr, socks5_port));
     let packet = "GET / HTTP/1.1\r\n" in
     let packet = packet ^ "Host: " ^ uri ^ "\r\n" in
+    let packet = packet ^ "\r\n" in
     let packet_len = String.length packet in
 
     let dst_addr = (gethostbyname uri).h_addr_list.(0) in
@@ -121,8 +135,11 @@ module Tester = struct
     Bytes.set_int16_ne buffer (1 + dst_addr_len) dst_port;
     Bytes.blit_string packet 0 buffer packet_offset packet_len;
 
-    let n = write sock buffer 0 (Bytes.length buffer) in
-    Printf.printf "[sent %4d bytes] %d\n" n
+    send sock buffer;
+
+    let buffer = receive sock in
+    print_endline "reply:";
+    print_endline (Bytes.to_string buffer)
 end
 
 module Msg = struct
@@ -170,14 +187,6 @@ module Msg = struct
       port = port;
     }
 end
-
-let receive sock =
-  let buffer_size = 4096 in
-  let buffer = Bytes.create buffer_size in
-  let n = read sock buffer 0 buffer_size in
-  Printf.printf "[recv %4d bytes] " n;
-  print_bytes (Bytes.sub buffer 0 n);
-  Bytes.sub buffer 0 n
 
 let client () =
   print_endline "socks5 client starts...";
@@ -250,7 +259,15 @@ let client () =
 
       let buffer = receive sock in
       let _msg = Msg.deserialize buffer in
-      ()
+
+      print_endline "connection established, will send data";
+      send sock packet;
+      print_endline "packet sent...";
+      let buffer = receive sock in
+      print_endline "received reply:";
+      print_endline (Bytes.to_string buffer);
+      send listen_sock buffer;
+      print_endline "sent reply"
     in
     loop ();
     shutdown sock SHUTDOWN_ALL
@@ -328,7 +345,17 @@ let server () =
         if msg.cmd_rep != 0x00 then begin
           shutdown s SHUTDOWN_ALL;
           Printf.printf "closed client connection\n";
-        end
+        end;
+
+        print_endline "will forward packets...";
+        let packet = receive s in
+        print_endline "received packet";
+        send dst_sock packet;
+        print_endline "sent packet";
+        let buffer = receive dst_sock in
+        print_endline "received reply from dst";
+        send s buffer;
+        print_endline "forwarded reply"
       in
       loop ()
     in
