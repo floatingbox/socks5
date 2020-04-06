@@ -114,6 +114,17 @@ module Tester = struct
        Lwt_main.run request*)
 
   let http_request uri socks5_addr socks5_port =
+    let uri_str = uri in
+    let uri = Uri.of_string uri in
+    let uri =
+      if Option.is_some (Uri.scheme uri) then uri
+      else Uri.of_string ("http://" ^ uri_str)
+    in
+    print_endline ("[http_request] uri: " ^ Uri.to_string uri);
+    let host = Uri.host uri |> Option.get in
+    let path = Uri.path uri in
+    let path = if path = "" then "/" else path in
+    print_endline ("[http_request] host: " ^ host);
     let socks5_addr =
       try (gethostbyname socks5_addr).h_addr_list.(0)
       with Not_found ->
@@ -122,17 +133,20 @@ module Tester = struct
     in
     let sock = socket PF_INET SOCK_STREAM 0 in
     connect sock (ADDR_INET (socks5_addr, socks5_port));
-    let packet = "GET / HTTP/1.1\r\n" in
-    let packet = packet ^ "Host: " ^ uri ^ "\r\n" in
+    let packet = "GET " ^ path ^ " HTTP/1.1\r\n" in
+    (*let packet = packet ^ "Host: " ^ host ^ "\r\n" in*)
     let packet = packet ^ "\r\n" in
     let packet_len = String.length packet in
 
-    let dst_addr = (gethostbyname uri).h_addr_list.(0) in
+    let dst_addr = (gethostbyname host).h_addr_list.(0) in
     let dst_addr_len = 4 in
     let dst_addr = Core.Unix.Inet_addr.to_string dst_addr in
     print_endline ("dst_addr: " ^ dst_addr);
     let dst_addr_buf = ipv4_addr_to_bytes dst_addr in
-    let dst_port = 80 in
+    let dst_port =
+      let scheme = Uri.scheme uri |> Option.get in
+      if scheme = "http" then 80 else 443
+    in
     let packet_offset = 1 + dst_addr_len + 2 in
 
     let buffer_len = packet_offset + packet_len in
@@ -242,9 +256,6 @@ let client () =
     let packet = Bytes.sub buffer packet_offset packet_len in
     Printf.printf "== packet: %s\n" (Bytes.to_string packet);
 
-    let dst_addr = "127.0.0.1" in
-    let dst_addr_len = 4 in
-    let dst_port = 80 in
     let msg : Msg.t =
       {
         ver = 5;
@@ -350,7 +361,8 @@ let server () =
 
         print_endline "will forward packets...";
         let packet = receive s in
-        print_endline "received packet";
+        print_endline "received packet:";
+        print_endline (Bytes.to_string packet);
         send dst_sock packet;
         print_endline "sent packet";
         let buffer = receive dst_sock in
