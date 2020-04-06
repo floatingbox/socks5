@@ -5,9 +5,12 @@ module Misc = struct
   let retransmit fdin fdout =
     let buffer_size = 4096 in
     let buffer = Bytes.create buffer_size in
-    let rec copy () = match read fdin buffer 0 buffer_size with
+    let rec copy () =
+      match read fdin buffer 0 buffer_size with
       | 0 -> ()
-      | n -> ignore (write fdout buffer 0 n); copy ()
+      | n ->
+          ignore (write fdout buffer 0 n);
+          copy ()
     in
     copy ()
 
@@ -15,19 +18,24 @@ module Misc = struct
     try f x with Unix_error (EINTR, _, _) -> restart_on_EINTR f x
 
   let try_finalize f x finally y =
-    let res = try f x with exn -> finally y; raise exn in
+    let res =
+      try f x
+      with exn ->
+        finally y;
+        raise exn
+    in
     finally y;
     res
 
-  let double_fork_treatment sock service (client_descr, _ as client) =
-    let treat () = match fork () with
+  let double_fork_treatment sock service ((client_descr, _) as client) =
+    let treat () =
+      match fork () with
       | 0 ->
-        if fork () <> 0 then exit 0;
-        close sock;
-        service client;
-        exit 0
-      | k ->
-        ignore (restart_on_EINTR (waitpid []) k)
+          if fork () <> 0 then exit 0;
+          close sock;
+          service client;
+          exit 0
+      | k -> ignore (restart_on_EINTR (waitpid []) k)
     in
     try_finalize treat () close client_descr
 
@@ -50,7 +58,7 @@ module Misc = struct
       let client = restart_on_EINTR accept server_sock in
       print_endline "[tcp_server] accepted client...";
       treat_connection server_sock client;
-      print_endline "[tcp_server] after treating client...";
+      print_endline "[tcp_server] after treating client..."
     done
 end
 
@@ -62,12 +70,12 @@ let ipv4_addr_to_bytes addr =
   let ss = String.split_on_char '.' addr in
   let is = List.map int_of_string ss in
   let bs = Bytes.create (List.length is) in
-  let rec set i vs = match (i, vs) with
-    | (_, []) -> ()
-    | (i, (x :: ys)) -> begin
-      Bytes.set bs i (char_of_int x);
-      set (i + 1) ys
-    end
+  let rec set i vs =
+    match (i, vs) with
+    | _, [] -> ()
+    | i, x :: ys ->
+        Bytes.set bs i (char_of_int x);
+        set (i + 1) ys
   in
   set 0 is;
   bs
@@ -76,11 +84,9 @@ let ipv4_addr_of_bytes by =
   let f s i =
     let v = Bytes.get by i in
     let v = v |> int_of_char |> string_of_int in
-    match s with
-    | "" -> v
-    | _ -> s ^ "." ^ v
+    match s with "" -> v | _ -> s ^ "." ^ v
   in
-  List.fold_left f "" [0;1;2;3]
+  List.fold_left f "" [ 0; 1; 2; 3 ]
 
 let receive sock =
   let buffer_size = 4096 in
@@ -96,23 +102,24 @@ let send sock buffer =
   print_bytes (Bytes.sub buffer 0 n)
 
 module Tester = struct
-(*  let request =
-    let uri = Uri.of_string "localhost" in
-    let%lwt (response, body) = Cohttp_lwt_unix.Client.get uri in
-    assert (response.status = `OK);
-    let%lwt body = Cohttp_lwt.Body.to_string body in
-    print_endline body |> Lwt.return
+  (* let request =
+       let uri = Uri.of_string "localhost" in
+       let%lwt (response, body) = Cohttp_lwt_unix.Client.get uri in
+       assert (response.status = `OK);
+       let%lwt body = Cohttp_lwt.Body.to_string body in
+       print_endline body |> Lwt.return
 
-  let do_request =
-    print_endline "Tester.do_request";
-    Lwt_main.run request*)
+     let do_request =
+       print_endline "Tester.do_request";
+       Lwt_main.run request*)
 
   let http_request uri socks5_addr socks5_port =
     let socks5_addr =
       try (gethostbyname socks5_addr).h_addr_list.(0)
       with Not_found ->
         prerr_endline (socks5_addr ^ ": Host not found");
-        exit 2 in
+        exit 2
+    in
     let sock = socket PF_INET SOCK_STREAM 0 in
     connect sock (ADDR_INET (socks5_addr, socks5_port));
     let packet = "GET / HTTP/1.1\r\n" in
@@ -144,12 +151,12 @@ end
 
 module Msg = struct
   type t = {
-    ver: int;
-    cmd_rep: int;
-    atyp: int;
-    addr: string;
-    addr_len: int;
-    port: int;
+    ver : int;
+    cmd_rep : int;
+    atyp : int;
+    addr : string;
+    addr_len : int;
+    port : int;
   }
 
   let serialize msg =
@@ -168,7 +175,7 @@ module Msg = struct
     let cmd = int_of_char (Bytes.get buffer 1) in
     let atyp = int_of_char (Bytes.get buffer 3) in
     (*(* 0x1: connect *)
-    assert (cmd = 1);*)
+      assert (cmd = 1);*)
     (* 0x1: ipv4 *)
     assert (atyp = 1);
     let addr_len = 4 in
@@ -178,116 +185,109 @@ module Msg = struct
     let port = Bytes.get_int16_ne buffer (4 + addr_len) in
     Printf.printf "== msg.addr: %s\n" addr;
     Printf.printf "== msg.port: %d\n" port;
-    {
-      ver = ver;
-      cmd_rep = cmd;
-      atyp = atyp;
-      addr = addr;
-      addr_len = addr_len;
-      port = port;
-    }
+    { ver; cmd_rep = cmd; atyp; addr; addr_len; port }
 end
 
 let client () =
   print_endline "socks5 client starts...";
-  let server_name = gethostname ()
-  and port_number = 5678 in
+  let server_name = gethostname () and port_number = 5678 in
   let server_addr =
     try (gethostbyname server_name).h_addr_list.(0)
     with Not_found ->
       prerr_endline (server_name ^ ": Host not found");
-      exit 2 in
+      exit 2
+  in
   let sock = socket PF_INET SOCK_STREAM 0 in
   connect sock (ADDR_INET (server_addr, port_number));
   (*match fork () with
-  | 0 ->*)
-    let version = 5 in
-    let nmethods = 1 in
-    let methods = 0x00 in
-    let buffer = Bytes.create 3 in
-    Bytes.set buffer 0 (char_of_int version);
-    Bytes.set buffer 1 (char_of_int nmethods);
-    Bytes.set buffer 2 (char_of_int methods);
-    let msg_len = 3 in
-    let n = write sock buffer 0 msg_len in
-    Printf.printf "[sent %4d bytes] " n;
-    print_bytes (Bytes.sub buffer 0 n);
-  (*  exit 0
-  | _ ->*)
-    let buffer_size = 4096 in
-    let buffer = Bytes.create buffer_size in
-    let n = read sock buffer 0 buffer_size in
-    Printf.printf "[recv %4d bytes] " n;
-    print_bytes (Bytes.sub buffer 0 n);
+    | 0 ->*)
+  let version = 5 in
+  let nmethods = 1 in
+  let methods = 0x00 in
+  let buffer = Bytes.create 3 in
+  Bytes.set buffer 0 (char_of_int version);
+  Bytes.set buffer 1 (char_of_int nmethods);
+  Bytes.set buffer 2 (char_of_int methods);
+  let msg_len = 3 in
+  let n = write sock buffer 0 msg_len in
+  Printf.printf "[sent %4d bytes] " n;
+  print_bytes (Bytes.sub buffer 0 n);
+  (* exit 0
+     | _ ->*)
+  let buffer_size = 4096 in
+  let buffer = Bytes.create buffer_size in
+  let n = read sock buffer 0 buffer_size in
+  Printf.printf "[recv %4d bytes] " n;
+  print_bytes (Bytes.sub buffer 0 n);
 
-    let listen_addr =
-      let listen_addr = (gethostbyname (gethostname ())).h_addr_list.(0) in
-      let listen_port = 4567 in
-      ADDR_INET (listen_addr, listen_port) in
-    let listen_sock = Misc.install_tcp_server_socket listen_addr in
-    let (listen_sock, _) = accept listen_sock in
+  let listen_addr =
+    let listen_addr = (gethostbyname (gethostname ())).h_addr_list.(0) in
+    let listen_port = 4567 in
+    ADDR_INET (listen_addr, listen_port)
+  in
+  let listen_sock = Misc.install_tcp_server_socket listen_addr in
+  let listen_sock, _ = accept listen_sock in
 
-    let loop () =
-      let buffer = receive listen_sock in
-      let dst_addr_len = int_of_char (Bytes.get buffer 0) in
-      let dst_addr_buf = Bytes.create dst_addr_len in
-      Bytes.blit buffer 1 dst_addr_buf 0 dst_addr_len;
-      let dst_addr = ipv4_addr_of_bytes dst_addr_buf in
-      let dst_port = Bytes.get_int16_ne buffer (1 + dst_addr_len) in
-      Printf.printf "== dst addr: %s\n" dst_addr;
-      Printf.printf "== dst port: %d\n" dst_port;
-      let packet_offset = 1 + dst_addr_len + 2 in
-      let packet_len = (Bytes.length buffer) - packet_offset in
-      let packet = Bytes.sub buffer packet_offset packet_len in
-      Printf.printf "== packet: %s\n" (Bytes.to_string packet);
+  let loop () =
+    let buffer = receive listen_sock in
+    let dst_addr_len = int_of_char (Bytes.get buffer 0) in
+    let dst_addr_buf = Bytes.create dst_addr_len in
+    Bytes.blit buffer 1 dst_addr_buf 0 dst_addr_len;
+    let dst_addr = ipv4_addr_of_bytes dst_addr_buf in
+    let dst_port = Bytes.get_int16_ne buffer (1 + dst_addr_len) in
+    Printf.printf "== dst addr: %s\n" dst_addr;
+    Printf.printf "== dst port: %d\n" dst_port;
+    let packet_offset = 1 + dst_addr_len + 2 in
+    let packet_len = Bytes.length buffer - packet_offset in
+    let packet = Bytes.sub buffer packet_offset packet_len in
+    Printf.printf "== packet: %s\n" (Bytes.to_string packet);
 
-      let dst_addr = "127.0.0.1" in
-      let dst_addr_len = 4 in
-      let dst_port = 80 in
-      let msg: Msg.t = {
+    let dst_addr = "127.0.0.1" in
+    let dst_addr_len = 4 in
+    let dst_port = 80 in
+    let msg : Msg.t =
+      {
         ver = 5;
         cmd_rep = 1;
         atyp = 1;
         addr = dst_addr;
         port = dst_port;
         addr_len = dst_addr_len;
-      } in
-      let buffer = Msg.serialize msg in
-      let n = write sock buffer 0 (Bytes.length buffer) in
-      Printf.printf "[sent %4d bytes] " n;
-      print_bytes (Bytes.sub buffer 0 n);
-
-      let buffer = receive sock in
-      let _msg = Msg.deserialize buffer in
-
-      print_endline "connection established, will send data";
-      send sock packet;
-      print_endline "packet sent...";
-      let buffer = receive sock in
-      print_endline "received reply:";
-      print_endline (Bytes.to_string buffer);
-      send listen_sock buffer;
-      print_endline "sent reply"
+      }
     in
-    loop ();
-    shutdown sock SHUTDOWN_ALL
+    let buffer = Msg.serialize msg in
+    let n = write sock buffer 0 (Bytes.length buffer) in
+    Printf.printf "[sent %4d bytes] " n;
+    print_bytes (Bytes.sub buffer 0 n);
+
+    let buffer = receive sock in
+    let _msg = Msg.deserialize buffer in
+
+    print_endline "connection established, will send data";
+    send sock packet;
+    print_endline "packet sent...";
+    let buffer = receive sock in
+    print_endline "received reply:";
+    print_endline (Bytes.to_string buffer);
+    send listen_sock buffer;
+    print_endline "sent reply"
+  in
+  loop ();
+  shutdown sock SHUTDOWN_ALL
 
 let server () =
   print_endline "socks5 server starts...";
-  if Array.length Sys.argv < 2 then begin
+  if Array.length Sys.argv < 2 then (
     prerr_endline "Usage: server <port>";
-    exit 2;
-  end;
+    exit 2 );
   let port = int_of_string Sys.argv.(1) in
   let host = (gethostbyname (gethostname ())).h_addr_list.(0) in
   let addr = ADDR_INET (host, port) in
-  let treat sock (_, client_addr as client) =
-    begin match client_addr with
-      | ADDR_INET(caller, _) ->
-        prerr_endline ("Connection from " ^ string_of_inet_addr caller);
-      | ADDR_UNIX _ ->
-        prerr_endline "Connection from the Unix domain (???)";
-    end;
+  let treat sock ((_, client_addr) as client) =
+    ( match client_addr with
+    | ADDR_INET (caller, _) ->
+        prerr_endline ("Connection from " ^ string_of_inet_addr caller)
+    | ADDR_UNIX _ -> prerr_endline "Connection from the Unix domain (???)" );
     let service (s, _) =
       print_endline "[service] entering...";
       let buffer_size = 4096 in
@@ -304,7 +304,7 @@ let server () =
       let n = write s buffer 0 2 in
       Printf.printf "[sent %4d bytes] " n;
       print_bytes (Bytes.sub buffer 0 n);
-      assert ((nmethod = 1) && (methods = 0x00));
+      assert (nmethod = 1 && methods = 0x00);
       (* 0x00: no authentication required *)
       let loop () =
         let buffer_size = 4096 in
@@ -322,30 +322,31 @@ let server () =
         let dst_sock = socket PF_INET SOCK_STREAM 0 in
         let bnd_addr = "127.0.0.1" in
         let bnd_port = 5679 in
-        let msg: Msg.t = {
-          ver = 5;
-          cmd_rep = begin
-            try
-              connect dst_sock (ADDR_INET (dst_inet_addr, msg.port));
-              Printf.printf "connection to %s:%d established...\n" msg.addr msg.port;
-              0x00
-            with Unix.Unix_error (err, _, _) ->
-              Printf.printf "### %s\n" (error_message err);
-              0x05
-          end;
-          atyp = 0x01;
-          addr = bnd_addr;
-          port = bnd_port;
-          addr_len = 4
-        } in
+        let msg : Msg.t =
+          {
+            ver = 5;
+            cmd_rep =
+              ( try
+                  connect dst_sock (ADDR_INET (dst_inet_addr, msg.port));
+                  Printf.printf "connection to %s:%d established...\n" msg.addr
+                    msg.port;
+                  0x00
+                with Unix.Unix_error (err, _, _) ->
+                  Printf.printf "### %s\n" (error_message err);
+                  0x05 );
+            atyp = 0x01;
+            addr = bnd_addr;
+            port = bnd_port;
+            addr_len = 4;
+          }
+        in
         let buffer = Msg.serialize msg in
         let n = write s buffer 0 (Bytes.length buffer) in
         Printf.printf "[sent %4d bytes] " n;
         print_bytes (Bytes.sub buffer 0 n);
-        if msg.cmd_rep != 0x00 then begin
+        if msg.cmd_rep != 0x00 then (
           shutdown s SHUTDOWN_ALL;
-          Printf.printf "closed client connection\n";
-        end;
+          Printf.printf "closed client connection\n" );
 
         print_endline "will forward packets...";
         let packet = receive s in
@@ -359,5 +360,6 @@ let server () =
       in
       loop ()
     in
-    Misc.double_fork_treatment sock service client in
+    Misc.double_fork_treatment sock service client
+  in
   Misc.tcp_server treat addr
