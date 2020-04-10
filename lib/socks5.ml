@@ -134,7 +134,8 @@ module Tester = struct
     let sock = socket PF_INET SOCK_STREAM 0 in
     connect sock (ADDR_INET (socks5_addr, socks5_port));
     let packet = "GET " ^ path ^ " HTTP/1.1\r\n" in
-    (*let packet = packet ^ "Host: " ^ host ^ "\r\n" in*)
+    let packet = packet ^ "Host: " ^ host ^ "\r\n" in
+    let packet = packet ^ "Accept: */*\r\n" in
     let packet = packet ^ "\r\n" in
     let packet_len = String.length packet in
 
